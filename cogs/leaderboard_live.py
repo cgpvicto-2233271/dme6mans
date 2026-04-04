@@ -32,8 +32,13 @@ class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
         return None
 
     async def _build_embed(self) -> discord.Embed:
-        joueurs = await self.bot.db.get_leaderboard_by_points(TOP_N)
-        season  = await self.bot.db.get_current_season()
+        try:
+            joueurs = await self.bot.db.get_leaderboard_by_points(TOP_N)
+            season  = await self.bot.db.get_current_season()
+        except Exception as e:
+            embed = discord.Embed(title="Classement DME 6Mans", color=discord.Color.gold())
+            embed.description = "*Chargement en cours...*"
+            return embed
 
         embed = discord.Embed(
             title=f"Classement DME 6Mans — {season['name']}",
@@ -65,15 +70,17 @@ class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
 
         embed.description = "\n".join(lignes)
 
-        # Stats globales
-        tous = await self.bot.db.get_leaderboard_by_points(999)
-        total_joueurs = len(tous)
-        total_matchs  = sum(j.get("wins", 0) + j.get("losses", 0) for j in tous) // 2
-        embed.add_field(
-            name="Saison 1",
-            value=f"**{total_joueurs}** joueurs · **{total_matchs}** matchs joues",
-            inline=False,
-        )
+        try:
+            tous = await self.bot.db.get_leaderboard_by_points(999)
+            total_joueurs = len(tous)
+            total_matchs  = sum(j.get("wins", 0) + j.get("losses", 0) for j in tous) // 2
+            embed.add_field(
+                name="Saison 1",
+                value=f"**{total_joueurs}** joueurs · **{total_matchs}** matchs joues",
+                inline=False,
+            )
+        except Exception:
+            pass
 
         now = datetime.datetime.now().strftime("%H:%M:%S")
         embed.set_footer(text=f"+3 pts victoire · +1 pt defaite · MMR = peak · Mis a jour a {now}")
@@ -81,37 +88,41 @@ class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
 
     @tasks.loop(minutes=REFRESH_MINUTES)
     async def live_update(self):
-        channel = await self._get_channel()
-        if not channel:
-            return
-
-        embed = await self._build_embed()
-
-        if self.message_id:
-            try:
-                msg = await channel.fetch_message(self.message_id)
-                await msg.edit(embed=embed)
+        try:
+            channel = await self._get_channel()
+            if not channel:
                 return
-            except (discord.NotFound, discord.HTTPException):
-                self.message_id = None
 
-        try:
-            async for msg in channel.history(limit=10):
-                if msg.author == self.bot.user:
-                    await msg.delete()
-        except discord.Forbidden:
-            pass
+            embed = await self._build_embed()
 
-        try:
-            msg = await channel.send(embed=embed)
-            self.message_id = msg.id
-        except discord.Forbidden:
-            pass
+            if self.message_id:
+                try:
+                    msg = await channel.fetch_message(self.message_id)
+                    await msg.edit(embed=embed)
+                    return
+                except (discord.NotFound, discord.HTTPException):
+                    self.message_id = None
+
+            try:
+                async for msg in channel.history(limit=10):
+                    if msg.author == self.bot.user:
+                        await msg.delete()
+            except discord.Forbidden:
+                pass
+
+            try:
+                msg = await channel.send(embed=embed)
+                self.message_id = msg.id
+            except discord.Forbidden:
+                pass
+
+        except Exception:
+            pass  # Silencieux pour eviter les crashes
 
     @live_update.before_loop
     async def before_live_update(self):
         await self.bot.wait_until_ready()
-        await asyncio.sleep(3)
+        await asyncio.sleep(10)  # Attendre que la DB soit prete
 
     @commands.command(name="lboard")
     async def lboard(self, ctx):
