@@ -133,11 +133,11 @@ class Database:
     async def get_leaderboard_by_points(self, limit=15):
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
-        async with db.execute("""
+            async with db.execute("""
             SELECT *, (COALESCE(wins,0)*3 + COALESCE(losses,0)) AS points
             FROM players ORDER BY points DESC, wins DESC LIMIT ?
-        """, (limit,)) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            """, (limit,)) as cur:
+                return [dict(r) for r in await cur.fetchall()]
 
     async def set_mmr(self, discord_id: int, mmr: int):
         async with aiosqlite.connect(self.path) as db:
