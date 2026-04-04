@@ -71,12 +71,6 @@ async def load_extensions():
         logger.info("Cog chargé : %s", ext)
 
 async def main():
-    import threading
-    from api import start_api
-    api_thread = threading.Thread(target=start_api, daemon=True)
-    api_thread.start()
-    logger.info("API demarree sur le port Railway")
-
     async with bot:
         await load_extensions()
         await bot.start(TOKEN)
