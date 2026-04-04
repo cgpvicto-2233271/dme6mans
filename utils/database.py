@@ -120,6 +120,25 @@ class Database:
                 )
             await db.commit()
 
+    async def add_win(self, discord_id):
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE players SET wins = wins + 1 WHERE discord_id = ?", (discord_id,))
+            await db.commit()
+
+    async def add_loss(self, discord_id):
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute("UPDATE players SET losses = losses + 1 WHERE discord_id = ?", (discord_id,))
+            await db.commit()
+
+    async def get_leaderboard_by_points(self, limit=15):
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT *, (COALESCE(wins,0)*3 + COALESCE(losses,0)) AS points
+            FROM players ORDER BY points DESC, wins DESC LIMIT ?
+        """, (limit,)) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
     async def set_mmr(self, discord_id: int, mmr: int):
         async with aiosqlite.connect(self.path) as db:
             await db.execute("UPDATE players SET mmr = ? WHERE discord_id = ?", (mmr, discord_id))

@@ -1,9 +1,6 @@
 """
 cogs/matchmaking.py  -  DME 6Mans
-Fixes :
-- Plusieurs matchs simultanes par file (suppression du verrou get_active_match)
-- BO5 precise dans les embeds
-- Validation votes : 2 capitaines alignes OU majorite (4/6 votes identiques)
+Systeme de points : +3 victoire, +1 defaite. MMR fixe (peak inscription).
 """
 
 import json
@@ -12,7 +9,7 @@ from collections import Counter
 import discord
 from discord.ext import commands
 
-from utils.mmr import calculer_mmr_equipes, moyenne_equipe, rang_dme
+from utils.mmr import moyenne_equipe, rang_dme
 
 QUEUE_SIZE   = 6
 QUEUE_LABELS = {"open": "Open", "champion": "Champion+", "gc": "GC+", "ssl": "SSL"}
@@ -124,14 +121,10 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
                 try: await member.move_to(vocal_attente)
                 except discord.Forbidden: pass
 
-    # ── Lancement du draft ─────────────────────────────────────────────────
     async def start_draft(self, guild, channel, queue_name):
         joueurs = await self.bot.db.queue_list(queue_name)
         if len(joueurs) < QUEUE_SIZE:
             return
-
-        # FIX : on retire le verrou get_active_match
-        # Plusieurs matchs peuvent se lancer en meme temps dans la meme file
 
         joueurs_match  = await self.bot.db.pop_queue_players(queue_name, QUEUE_SIZE)
         joueurs_tries  = sorted(joueurs_match, key=lambda j: j["mmr"], reverse=True)
@@ -191,14 +184,15 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
             out = []
             for p in players:
                 rang, emoji = rang_dme(p["mmr"], p.get("wins", 0))
-                out.append(f"<@{p['discord_id']}> - **{p['mmr']}** {emoji} {rang}")
+                pts = p.get("wins", 0) * 3 + p.get("losses", 0)
+                out.append(f"<@{p['discord_id']}> - **{p['mmr']}** MMR · {pts} pts {emoji} {rang}")
             return "\n".join(out)
 
         embed = discord.Embed(
             title=f"Match #{match['id']} - Pret a jouer !",
             description=(
-                f"File : **{QUEUE_LABELS.get(match['queue_name'], match['queue_name'].upper())}** · **BO5** (premier a 3 victoires)\n\n"
-                f"Rapporte le resultat avec `!w {match['id']}` ou `!l {match['id']}`\n"
+                f"File : **{QUEUE_LABELS.get(match['queue_name'], match['queue_name'].upper())}** · **BO5**\n\n"
+                f"Rapporte avec `!w {match['id']}` (victoire) ou `!l {match['id']}` (defaite)\n"
                 f"Validation : **2 capitaines alignes** ou **4 votes identiques sur 6**"
             ),
             color=discord.Color.green(),
@@ -214,14 +208,13 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
             ch = guild.get_channel(text_id)
             if ch:
                 await ch.send(
-                    f"Bienvenue ! Format **BO5** — premier a 3 victoires.\n"
-                    f"Rapportez le resultat avec `!w {match['id']}` ou `!l {match['id']}`.\n"
-                    f"Validation : **2 capitaines alignes** ou **4 votes identiques sur 6**."
+                    f"Format **BO5** — premier a 3 victoires.\n"
+                    f"`!w {match['id']}` victoire · `!l {match['id']}` defaite\n"
+                    f"**+3 pts** victoire · **+1 pt** defaite"
                 )
 
     @commands.command(name="pick")
     async def pick(self, ctx, match_id: int, joueur: discord.Member):
-        """Pick pendant la draft. Usage : !pick <match_id> @joueur"""
         match = await self.bot.db.get_match(match_id)
         if not match:
             await ctx.send("Match introuvable.")
@@ -264,36 +257,35 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
         votes = await self.bot.db.register_report_vote(match_id, ctx.author.id, winner, 0, 0)
         signature  = Counter(v["winner"] for v in votes.values())
         top_winner, top_count = signature.most_common(1)[0]
-        total_votes = len(votes)
 
-        # Validation : 2 capitaines alignes OU 4 votes identiques sur 6
         cap_orange_vote = votes.get(str(match["captain_orange_id"]))
         cap_blue_vote   = votes.get(str(match["captain_blue_id"]))
         captains_ok = (
             cap_orange_vote and cap_blue_vote
             and cap_orange_vote["winner"] == cap_blue_vote["winner"]
         )
-        majorite_ok = top_count >= 4  # 4 votes identiques sur 6
+        majorite_ok = top_count >= 4
 
         if not ctx.author.guild_permissions.administrator and not captains_ok and not majorite_ok:
             await ctx.message.add_reaction("✅")
             await ctx.send(
                 f"Vote enregistre pour **{top_winner}** ({top_count}/6).\n"
-                f"En attente : **2 capitaines alignes** ou **4 votes identiques**. "
-                f"Votes actuels : **{top_count}/4**"
+                f"En attente : **2 capitaines alignes** ou **4 votes identiques**."
             )
             return
 
-        # Validation confirmee
+        # Validation — MMR fixe, on ajoute seulement wins/losses
         gagnants_ids = team_orange_ids if top_winner == "orange" else team_blue_ids
         perdants_ids = team_blue_ids   if top_winner == "orange" else team_orange_ids
 
         gagnants = [p for p in [await self.bot.db.get_player(x) for x in gagnants_ids] if p]
         perdants = [p for p in [await self.bot.db.get_player(x) for x in perdants_ids] if p]
-        resultats = calculer_mmr_equipes(gagnants, perdants)
 
-        for joueur_id, (nouveau_mmr, _) in resultats.items():
-            await self.bot.db.update_mmr(joueur_id, nouveau_mmr, joueur_id in gagnants_ids)
+        # MMR fixe - juste incrementer wins/losses
+        for j in gagnants:
+            await self.bot.db.add_win(j["discord_id"])
+        for j in perdants:
+            await self.bot.db.add_loss(j["discord_id"])
 
         await self.bot.db.finish_match(match_id, top_winner, 0, 0)
         await self._ramener_joueurs(ctx.guild, match, match["queue_name"])
@@ -307,29 +299,33 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
         gagnants_lignes, perdants_lignes = [], []
 
         for j in gagnants:
-            nouveau, diff = resultats[j["discord_id"]]
-            signe    = "+" if diff >= 0 else ""
             new_wins = j.get("wins", 0) + 1
-            rang, emoji = rang_dme(nouveau, new_wins)
-            gagnants_lignes.append(f"<@{j['discord_id']}> `{signe}{diff}` -> **{nouveau}** {emoji} {rang}")
+            new_losses = j.get("losses", 0)
+            pts = new_wins * 3 + new_losses
+            rang, emoji = rang_dme(j["mmr"], new_wins)
+            gagnants_lignes.append(
+                f"<@{j['discord_id']}> `+3 pts` → **{pts} pts** · {emoji} {rang}"
+            )
             member = ctx.guild.get_member(j["discord_id"])
             if member:
-                try: await _assigner_roles(member, nouveau, new_wins)
+                try: await _assigner_roles(member, j["mmr"], new_wins)
                 except discord.Forbidden: pass
 
         for j in perdants:
-            nouveau, diff = resultats[j["discord_id"]]
-            signe = "+" if diff >= 0 else ""
-            wins  = j.get("wins", 0)
-            rang, emoji = rang_dme(nouveau, wins)
-            perdants_lignes.append(f"<@{j['discord_id']}> `{signe}{diff}` -> **{nouveau}** {emoji} {rang}")
+            wins   = j.get("wins", 0)
+            losses = j.get("losses", 0) + 1
+            pts    = wins * 3 + losses
+            rang, emoji = rang_dme(j["mmr"], wins)
+            perdants_lignes.append(
+                f"<@{j['discord_id']}> `+1 pt` → **{pts} pts** · {emoji} {rang}"
+            )
             member = ctx.guild.get_member(j["discord_id"])
             if member:
-                try: await _assigner_roles(member, nouveau, wins)
+                try: await _assigner_roles(member, j["mmr"], wins)
                 except discord.Forbidden: pass
 
-        embed.add_field(name="🏆 Gagnants", value="\n".join(gagnants_lignes), inline=False)
-        embed.add_field(name="❌ Perdants",  value="\n".join(perdants_lignes), inline=False)
+        embed.add_field(name="🏆 Gagnants (+3 pts)", value="\n".join(gagnants_lignes), inline=False)
+        embed.add_field(name="❌ Perdants (+1 pt)",   value="\n".join(perdants_lignes), inline=False)
         await ctx.send(embed=embed)
 
         for channel_id in [match.get("channel_text_id"), match.get("channel_voice_orange_id"), match.get("channel_voice_blue_id")]:
@@ -341,7 +337,6 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
 
     @commands.command(name="w", aliases=["win"])
     async def win(self, ctx, match_id: int):
-        """Reporter une victoire. Usage : !w <match_id>"""
         match = await self.bot.db.get_match(match_id)
         if not match:
             await ctx.send(f"Match #{match_id} introuvable.")
@@ -352,7 +347,6 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
 
     @commands.command(name="l", aliases=["loss", "lose"])
     async def loss(self, ctx, match_id: int):
-        """Reporter une defaite. Usage : !l <match_id>"""
         match = await self.bot.db.get_match(match_id)
         if not match:
             await ctx.send(f"Match #{match_id} introuvable.")
@@ -364,10 +358,9 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
     @commands.command(name="forcematch")
     @commands.has_permissions(administrator=True)
     async def forcematch(self, ctx, queue="open"):
-        """[Admin] Forcer un draft. Usage : !forcematch <queue>"""
         queue = queue.lower()
         if queue not in ("open", "champion", "gc", "ssl"):
-            await ctx.send("File invalide. Choix : `open`, `champion`, `gc`, `ssl`")
+            await ctx.send("File invalide.")
             return
         total = await self.bot.db.queue_count(queue)
         if total < QUEUE_SIZE:
@@ -379,7 +372,6 @@ class MatchmakingCog(commands.Cog, name="Matchmaking"):
     @commands.command(name="cancelmatch")
     @commands.has_permissions(administrator=True)
     async def cancelmatch(self, ctx, match_id: int):
-        """[Admin] Annuler un match. Usage : !cancelmatch <match_id>"""
         await self.bot.db.cancel_match(match_id)
         await ctx.send(f"Match #{match_id} annule.")
 

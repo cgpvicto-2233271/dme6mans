@@ -1,8 +1,7 @@
 """
 cogs/leaderboard_live.py  -  DME 6Mans
-Classement base sur un score combine :
-  Score = (winrate * 0.5) + (mmr / 2000 * 0.35) + (matchs_joues / 100 * 0.15)
-Quelqu'un avec beaucoup de victoires ET un bon winrate sera toujours devant.
+Classement par points : wins*3 + losses*1
+MMR affiche comme indicateur de niveau uniquement.
 """
 
 import asyncio
@@ -14,15 +13,6 @@ from utils.mmr import rang_dme
 LEADERBOARD_CHANNEL = "leaderboard"
 REFRESH_MINUTES     = 2
 TOP_N               = 15
-
-
-def score_classement(mmr: int, wins: int, losses: int) -> float:
-    """Score combine pour le classement."""
-    total   = wins + losses
-    winrate = (wins / total) if total > 0 else 0
-    # Penalise les joueurs avec trop peu de matchs
-    poids_matchs = min(total / 20, 1.0)  # plein poids apres 20 matchs
-    return (winrate * 0.5 + (mmr / 2000) * 0.35 + (total / 100) * 0.15) * poids_matchs
 
 
 class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
@@ -42,14 +32,8 @@ class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
         return None
 
     async def _build_embed(self) -> discord.Embed:
-        joueurs = await self.bot.db.get_leaderboard(50)
+        joueurs = await self.bot.db.get_leaderboard_by_points(TOP_N)
         season  = await self.bot.db.get_current_season()
-
-        # Trier par score combine
-        def sort_key(j):
-            return score_classement(j["mmr"], j.get("wins", 0), j.get("losses", 0))
-
-        joueurs = sorted(joueurs, key=sort_key, reverse=True)[:TOP_N]
 
         embed = discord.Embed(
             title=f"Classement DME 6Mans — {season['name']}",
@@ -69,30 +53,30 @@ class LeaderboardLiveCog(commands.Cog, name="LeaderboardLive"):
             losses = j.get("losses", 0)
             total  = wins + losses
             wr     = f"{(wins / total * 100):.0f}%" if total else "—"
+            pts    = wins * 3 + losses
             rang, emoji = rang_dme(j["mmr"], wins)
             prefix = medailles[i - 1] if i <= 3 else f"`{i}.`"
-
-            # Indicateur de placement si moins de 10 matchs
             statut = " `placement`" if total < 10 else ""
 
             lignes.append(
-                f"{prefix} <@{j['discord_id']}> {emoji} **{j['mmr']}** "
-                f"· {wins}V/{losses}D · WR {wr}{statut}"
+                f"{prefix} <@{j['discord_id']}> {emoji} **{pts} pts** "
+                f"· {wins}V/{losses}D · WR {wr} · {j['mmr']} MMR{statut}"
             )
 
         embed.description = "\n".join(lignes)
 
         # Stats globales
-        total_joueurs = await self.bot.db.get_leaderboard(999)
-        total_matchs  = sum(j.get("wins", 0) + j.get("losses", 0) for j in total_joueurs) // 2
+        tous = await self.bot.db.get_leaderboard_by_points(999)
+        total_joueurs = len(tous)
+        total_matchs  = sum(j.get("wins", 0) + j.get("losses", 0) for j in tous) // 2
         embed.add_field(
             name="Saison 1",
-            value=f"**{len(total_joueurs)}** joueurs · **{total_matchs}** matchs joues",
+            value=f"**{total_joueurs}** joueurs · **{total_matchs}** matchs joues",
             inline=False,
         )
 
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        embed.set_footer(text=f"Classement par winrate + MMR + activite · Mis a jour a {now}")
+        embed.set_footer(text=f"+3 pts victoire · +1 pt defaite · MMR = peak · Mis a jour a {now}")
         return embed
 
     @tasks.loop(minutes=REFRESH_MINUTES)
