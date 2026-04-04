@@ -19,7 +19,7 @@ load_dotenv()
 BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
 TOKEN             = os.getenv("DISCORD_TOKEN")
 PREFIX            = os.getenv("BOT_PREFIX", "!")
-GUILD_ID          = int(os.getenv("GUILD_ID", "0") or 0)
+GUILD_ID = int(os.getenv("DME_GUILD_ID", "0") or 0)
 DATABASE_PATH     = os.path.join(BASE_DIR, "data", "database.db")
 MATCH_CATEGORY_ID = int(os.getenv("MATCH_CATEGORY_ID", "0") or 0)
 
