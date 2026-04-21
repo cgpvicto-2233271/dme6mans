@@ -154,7 +154,7 @@ class AdminCog(commands.Cog, name="Admin"):
 
     # ── !mmrlogs ──────────────────────────────────────────────────────────────
 
-    @commands.command(name="mmrlogs", aliases=["mmrlog", "mlog"])
+    @commands.command(name="mmrlogs", aliases=["mlog"])
     @commands.has_permissions(administrator=True)
     async def mmrlogs(self, ctx: commands.Context, member: discord.Member):
         """[Admin] Voir l'historique MMR d'un joueur. Usage : !mmrlogs @joueur"""
