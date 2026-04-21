@@ -1,3 +1,28 @@
 [2026-04-20 23:53:15] INFO     [bot] Cog chargé : cogs.queue
 [2026-04-20 23:53:15] INFO     [bot] Cog chargé : cogs.matchmaking
 [2026-04-20 23:53:15] INFO     [bot] Cog chargé : cogs.stats
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.queue
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.matchmaking
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.stats
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.admin
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.verify
+[2026-04-20 23:54:57] INFO     [bot] Cog chargé : cogs.leaderboard_live
+[2026-04-20 23:55:00] INFO     [database] Migration: players.season_wins ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: players.season_losses ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: players.last_match_at ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: tracker_links.platform ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: tracker_links.rl_username ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: tracker_links.rl_mmr ajouté
+[2026-04-20 23:55:00] INFO     [database] Migration: tracker_links.last_checked_at ajouté
+[2026-04-20 23:55:00] INFO     [database] Base de données prête: C:\Users\pc\OneDrive\Bureau\6MANS-DME\dme-final\data\database.db
+[2026-04-20 23:55:00] INFO     [bot] Bot connecté : DME 6mans#2956 (1486828097427734628)
+[2026-04-20 23:55:00] INFO     [bot] Guild ID : 277195539857276928 | Category ID : 1487565564900540577
+[2026-04-20 23:55:11] INFO     [leaderboard] Leaderboard posté (id=1495996308178342020) dans #leaderboard
+[2026-04-20 23:57:11] INFO     [leaderboard] Leaderboard posté (id=1495996811867848805) dans #leaderboard
+[2026-04-20 23:58:13] INFO     [queue] Queue join: DME Coussinho (744663286800187463) → gc [1736 MMR]
+[2026-04-20 23:59:11] INFO     [leaderboard] Leaderboard posté (id=1495997315692105769) dans #leaderboard
+[2026-04-21 00:01:11] INFO     [leaderboard] Leaderboard posté (id=1495997818295287818) dans #leaderboard
+[2026-04-21 00:03:11] INFO     [leaderboard] Leaderboard posté (id=1495998321062445252) dans #leaderboard
+[2026-04-21 00:05:16] INFO     [leaderboard] Leaderboard posté (id=1495998844679229561) dans #leaderboard
+[2026-04-21 00:07:11] INFO     [leaderboard] Leaderboard posté (id=1495999328362299544) dans #leaderboard
+[2026-04-21 00:09:11] INFO     [leaderboard] Leaderboard posté (id=1495999831590572083) dans #leaderboard

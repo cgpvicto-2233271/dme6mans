@@ -275,14 +275,14 @@ class Database:
             await db.commit()
 
     async def get_leaderboard_by_points(self, limit: int = 15) -> list[dict]:
-        """Classement par MMR DESC (principal), puis points comme départage."""
+        """Classement par points (wins*3 + losses) DESC, puis wins et mmr en départage."""
         async with aiosqlite.connect(self.path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """SELECT *,
                    (COALESCE(wins,0)*3 + COALESCE(losses,0)) AS points
                    FROM players
-                   ORDER BY mmr DESC, points DESC, wins DESC
+                   ORDER BY points DESC, wins DESC, mmr DESC
                    LIMIT ?""",
                 (limit,),
             ) as cur:
