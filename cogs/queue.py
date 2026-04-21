@@ -1,9 +1,11 @@
 """
-cogs/queue.py  -  DME 6Mans
+cogs/queue.py  —  DME 6Mans
 - !q     : rejoindre la file du channel actuel
 - !dq    : quitter la file
 - !queue : voir la file du channel actuel
-- DQ automatique apres 30 minutes d'inactivite
+- DQ automatique après 30 minutes
+- Anti double-queue (joueur en match actif)
+- Vérification ban queue
 """
 
 import asyncio
@@ -11,16 +13,18 @@ import discord
 from discord.ext import commands, tasks
 
 from utils.mmr import rang_dme, seuil_min_queue
+from utils.logger import setup_logger
+
+log = setup_logger("queue")
 
 QUEUE_SIZE = 6
 
-# Mapping channel -> queue
 CHANNEL_QUEUE_MAP = {
     "6mans-open":     "open",
     "6mans-champion": "champion",
     "6mans-gc":       "gc",
     "6mans-ssl":      "ssl",
-    "queue":          "open",   # channel generique
+    "queue":          "open",
 }
 
 QUEUE_LABELS = {
@@ -37,7 +41,13 @@ QUEUE_EMOJI = {
     "ssl":      "👑",
 }
 
-# Seuils corrects
+QUEUE_COLORS = {
+    "open":     0x99AAB5,
+    "champion": 0x3498DB,
+    "gc":       0x9B59B6,
+    "ssl":      0xF1C40F,
+}
+
 SEUILS = {
     "open":     0,
     "champion": 1200,
@@ -49,12 +59,17 @@ AFK_MINUTES = 30
 
 
 def _get_queue_from_channel(channel_name: str) -> str | None:
-    """Retourne le nom de la file selon le channel."""
     name = channel_name.lower()
     for key, queue in CHANNEL_QUEUE_MAP.items():
         if key in name:
             return queue
     return None
+
+
+def _progress_bar(current: int, total: int, width: int = 10) -> str:
+    filled = round(width * current / total)
+    bar = "█" * filled + "░" * (width - filled)
+    return f"`{bar}` {current}/{total}"
 
 
 class QueueCog(commands.Cog, name="Queue"):
@@ -65,105 +80,146 @@ class QueueCog(commands.Cog, name="Queue"):
     def cog_unload(self):
         self.afk_checker.cancel()
 
-    # ── Embed d'une file specifique ────────────────────────────────────────
+    # ── Embed file simple ──────────────────────────────────────────────────────
+
     async def embed_queue_simple(self, queue_name: str) -> discord.Embed:
-        """Embed pour une seule file."""
         joueurs = await self.bot.db.queue_list(queue_name)
-        seuil   = SEUILS.get(queue_name, 0)
-        label   = QUEUE_LABELS.get(queue_name, queue_name.upper())
-        emoji   = QUEUE_EMOJI.get(queue_name, "")
+        seuil = SEUILS.get(queue_name, 0)
+        label = QUEUE_LABELS.get(queue_name, queue_name.upper())
+        emoji = QUEUE_EMOJI.get(queue_name, "")
+        color = QUEUE_COLORS.get(queue_name, 0xE67E22)
 
         embed = discord.Embed(
             title=f"{emoji} File {label} — DME 6Mans",
-            color=discord.Color.orange(),
+            color=color,
         )
 
         lignes = []
-        for joueur in joueurs[:6]:
+        for i, joueur in enumerate(joueurs[:QUEUE_SIZE], start=1):
             rang, rang_emoji = rang_dme(joueur["mmr"], joueur.get("wins", 0))
-            lignes.append(f"<@{joueur['discord_id']}> — **{joueur['mmr']}** {rang_emoji} {rang}")
+            lignes.append(
+                f"`{i}.` <@{joueur['discord_id']}> — **{joueur['mmr']}** MMR {rang_emoji} {rang}"
+            )
 
         embed.add_field(
-            name=f"Joueurs ({len(joueurs)}/{QUEUE_SIZE}) · min {seuil} MMR",
-            value="\n".join(lignes) if lignes else "*Vide*",
+            name=f"Joueurs · min {seuil} MMR",
+            value="\n".join(lignes) if lignes else "*File vide*",
             inline=False,
         )
-
-        # Barre de progression
-        filled  = "█" * len(joueurs)
-        empty   = "░" * (QUEUE_SIZE - len(joueurs))
         embed.add_field(
             name="Progression",
-            value=f"`{filled}{empty}` {len(joueurs)}/{QUEUE_SIZE}",
+            value=_progress_bar(len(joueurs), QUEUE_SIZE),
             inline=False,
         )
-
-        embed.set_footer(text=f"!q pour rejoindre · !dq pour quitter · DQ auto apres {AFK_MINUTES} min")
+        embed.set_footer(
+            text=f"!q rejoindre · !dq quitter · DQ auto {AFK_MINUTES} min"
+        )
         return embed
 
-    # ── Embed global (toutes les files) ───────────────────────────────────
+    # ── Embed global (toutes les files) ──────────────────────────────────────
+
     async def embed_queue_globale(self) -> discord.Embed:
         snapshot = await self.bot.db.queue_snapshot()
         embed = discord.Embed(
             title="🎮 DME 6Mans — Rocket League",
-            description="Files actives par rang. Utilise `!q` pour rejoindre ta file automatiquement.",
-            color=discord.Color.orange(),
+            description="Files actives. Utilise `!q` dans ton channel de file.",
+            color=0xE67E22,
         )
         for nom in ["open", "champion", "gc", "ssl"]:
             joueurs = snapshot[nom]
-            seuil   = SEUILS.get(nom, 0)
-            lignes  = []
-            for joueur in joueurs[:6]:
-                rang, emoji = rang_dme(joueur["mmr"], joueur.get("wins", 0))
-                lignes.append(f"<@{joueur['discord_id']}> — **{joueur['mmr']}** {emoji} {rang}")
-            valeur = "\n".join(lignes) if lignes else "*Vide*"
-            label  = f"{QUEUE_EMOJI[nom]} {QUEUE_LABELS[nom]} ({len(joueurs)}/{QUEUE_SIZE})"
+            seuil = SEUILS[nom]
+            lignes = []
+            for joueur in joueurs[:QUEUE_SIZE]:
+                rang, em = rang_dme(joueur["mmr"], joueur.get("wins", 0))
+                lignes.append(
+                    f"<@{joueur['discord_id']}> — **{joueur['mmr']}** {em}"
+                )
+            bar = _progress_bar(len(joueurs), QUEUE_SIZE)
+            label = f"{QUEUE_EMOJI[nom]} {QUEUE_LABELS[nom]}"
             if seuil > 0:
-                label += f" · min {seuil} MMR"
+                label += f" · {seuil}+ MMR"
+            valeur = (
+                ("\n".join(lignes) + f"\n{bar}")
+                if lignes
+                else f"*Vide* · {bar}"
+            )
             embed.add_field(name=label, value=valeur, inline=False)
-        embed.set_footer(text=f"!q · !dq · !stats · !top · !rc <plateforme> <pseudo> · DQ auto {AFK_MINUTES}min")
+        embed.set_footer(
+            text=f"!q · !dq · !stats · !top · !rc <plateforme> <pseudo> · DQ {AFK_MINUTES}min"
+        )
         return embed
 
-    # ── Logique rejoindre ──────────────────────────────────────────────────
-    async def _rejoindre(self, member: discord.Member, queue_name: str) -> tuple[bool, str]:
-        # Verifier inscription
+    # ── Logique rejoindre ──────────────────────────────────────────────────────
+
+    async def _rejoindre(
+        self, member: discord.Member, queue_name: str
+    ) -> tuple[bool, str]:
+        # 1. Inscription obligatoire
         lien = await self.bot.db.get_tracker_link(member.id)
         if not lien:
-            return False, "Tu dois d'abord t'inscrire avec `!rc <plateforme> <pseudo>`."
-
-        joueur = await self.bot.db.get_or_create_player(member.id, member.display_name)
-        mmr    = joueur["mmr"]
-        seuil  = SEUILS.get(queue_name, 0)
-
-        if mmr < seuil:
             return False, (
-                f"Il faut au moins **{seuil} MMR** pour la file **{QUEUE_LABELS[queue_name]}**. "
-                f"Tu es a **{mmr} MMR**."
+                "Tu dois d'abord t'inscrire avec `!rc <plateforme> <pseudo>`.\n"
+                "Exemple : `!rc epic MonPseudo`"
             )
 
-        actif = await self.bot.db.get_active_match(queue_name)
-        if actif:
-            return False, f"Un match est deja en cours dans la file **{QUEUE_LABELS[queue_name]}**."
+        # 2. Vérification ban queue
+        ban = await self.bot.db.is_banned(member.id)
+        if ban:
+            raison = ban.get("reason", "Aucune raison")
+            until = ban.get("banned_until")
+            msg = f"Tu es banni de la queue. Raison : **{raison}**"
+            if until:
+                msg += f"\nExpire : `{until[:16]}`"
+            return False, msg
 
+        # 3. Joueur déjà dans un match actif
+        match_actif = await self.bot.db.is_player_in_active_match(member.id)
+        if match_actif:
+            return False, (
+                f"Tu es déjà dans le match **#{match_actif}** en cours.\n"
+                f"Termine ce match avant de rejoindre une file."
+            )
+
+        # 4. MMR suffisant
+        joueur = await self.bot.db.get_or_create_player(member.id, member.display_name)
+        mmr = joueur["mmr"]
+        seuil = SEUILS.get(queue_name, 0)
+        if mmr < seuil:
+            return False, (
+                f"Il faut au moins **{seuil} MMR** pour la file **{QUEUE_LABELS[queue_name]}**.\n"
+                f"Ton MMR : **{mmr}**"
+            )
+
+        # 5. Quitter l'ancienne file si différente
         await self.bot.db.queue_leave(member.id)
+
+        # 6. Rejoindre
         ajoute = await self.bot.db.queue_join(member.id, queue_name)
         if not ajoute:
-            return False, f"Tu es deja dans la file **{QUEUE_LABELS[queue_name]}**."
+            return False, f"Tu es déjà dans la file **{QUEUE_LABELS[queue_name]}**."
 
         rang, emoji = rang_dme(mmr, joueur.get("wins", 0))
+        log.info(
+            "Queue join: %s (%d) → %s [%d MMR]",
+            member.display_name,
+            member.id,
+            queue_name,
+            mmr,
+        )
         return True, (
             f"**{member.display_name}** a rejoint la file **{QUEUE_LABELS[queue_name]}** "
             f"— {emoji} {rang} · **{mmr} MMR**"
         )
 
-    # ── !q ─────────────────────────────────────────────────────────────────
+    # ── !q ────────────────────────────────────────────────────────────────────
+
     @commands.command(name="q", aliases=["join", "queue_join"])
     async def q(self, ctx: commands.Context):
-        """Rejoindre la file du channel actuel. Usage : !q"""
+        """Rejoindre la file du channel. Usage : !q"""
         queue_name = _get_queue_from_channel(ctx.channel.name)
         if not queue_name:
             await ctx.send(
-                "Utilise cette commande dans un channel de file :\n"
+                "❌ Utilise cette commande dans un channel de file :\n"
                 "`#6mans-open` · `#6mans-champion` · `#6mans-gc` · `#6mans-ssl`"
             )
             return
@@ -177,28 +233,32 @@ class QueueCog(commands.Cog, name="Queue"):
             if matchmaking:
                 await matchmaking.start_draft(ctx.guild, ctx.channel, queue_name)
 
-    # ── !dq ────────────────────────────────────────────────────────────────
+    # ── !dq ───────────────────────────────────────────────────────────────────
+
     @commands.command(name="dq", aliases=["leave", "queue_leave"])
     async def dq(self, ctx: commands.Context):
-        """Quitter ta file actuelle. Usage : !dq"""
+        """Quitter ta file. Usage : !dq"""
         retire = await self.bot.db.queue_leave(ctx.author.id)
         if not retire:
-            await ctx.send("Tu n'etais dans aucune file.")
+            await ctx.send("❌ Tu n'étais dans aucune file.")
             return
 
-        # Afficher la file du channel si applicable, sinon globale
         queue_name = _get_queue_from_channel(ctx.channel.name)
         if queue_name:
             embed = await self.embed_queue_simple(queue_name)
         else:
             embed = await self.embed_queue_globale()
 
-        await ctx.send(f"**{ctx.author.display_name}** a quitte la file.", embed=embed)
+        await ctx.send(
+            f"**{ctx.author.display_name}** a quitté la file.", embed=embed
+        )
+        log.info("Queue leave: %s (%d)", ctx.author.display_name, ctx.author.id)
 
-    # ── !queue ─────────────────────────────────────────────────────────────
+    # ── !queue ────────────────────────────────────────────────────────────────
+
     @commands.command(name="queue", aliases=["files", "ql"])
     async def queue_view(self, ctx: commands.Context):
-        """Voir la file du channel actuel. Usage : !queue"""
+        """Voir la file. Usage : !queue"""
         queue_name = _get_queue_from_channel(ctx.channel.name)
         if queue_name:
             embed = await self.embed_queue_simple(queue_name)
@@ -206,47 +266,52 @@ class QueueCog(commands.Cog, name="Queue"):
             embed = await self.embed_queue_globale()
         await ctx.send(embed=embed)
 
-    # ── DQ automatique apres 30 minutes ───────────────────────────────────
+    # ── DQ automatique AFK ────────────────────────────────────────────────────
+
     @tasks.loop(minutes=1)
     async def afk_checker(self):
-        """Verifie toutes les minutes si des joueurs sont AFK depuis 30 min."""
         try:
             expiries = await self.bot.db.get_expired_queue_players(AFK_MINUTES)
             for joueur in expiries:
                 await self.bot.db.queue_leave(joueur["discord_id"])
+                log.info(
+                    "AFK DQ: %d de la file %s",
+                    joueur["discord_id"],
+                    joueur["queue_name"],
+                )
 
-                # Notifier le joueur
                 for guild in self.bot.guilds:
                     member = guild.get_member(joueur["discord_id"])
-                    if member:
-                        try:
-                            await member.send(
-                                f"Tu as ete retire de la file **{QUEUE_LABELS.get(joueur['queue_name'], joueur['queue_name'])}** "
-                                f"apres {AFK_MINUTES} minutes d'inactivite. "
-                                f"Utilise `!q` pour te remettre en file."
-                            )
-                        except discord.Forbidden:
-                            pass
+                    if not member:
+                        continue
 
-                        # Notifier dans le channel de la file
-                        queue_name = joueur["queue_name"]
-                        channel_name = {
-                            "open": "6mans-open",
-                            "champion": "6mans-champion",
-                            "gc": "6mans-gc",
-                            "ssl": "6mans-ssl",
-                        }.get(queue_name)
-                        if channel_name:
-                            ch = discord.utils.get(guild.text_channels, name=channel_name)
-                            if ch:
-                                await ch.send(
-                                    f"**{member.display_name}** a ete retire de la file "
-                                    f"**{QUEUE_LABELS.get(queue_name, queue_name)}** "
-                                    f"(AFK {AFK_MINUTES} min)."
-                                )
-                        break
-        except Exception as e:
-            pass  # Silencieux pour eviter les logs a chaque minute
+                    try:
+                        await member.send(
+                            f"⏱️ Tu as été retiré de la file "
+                            f"**{QUEUE_LABELS.get(joueur['queue_name'], joueur['queue_name'])}** "
+                            f"après {AFK_MINUTES} minutes d'inactivité.\n"
+                            f"Utilise `!q` pour te remettre en file."
+                        )
+                    except discord.Forbidden:
+                        pass
+
+                    ch_name = {
+                        "open":     "6mans-open",
+                        "champion": "6mans-champion",
+                        "gc":       "6mans-gc",
+                        "ssl":      "6mans-ssl",
+                    }.get(joueur["queue_name"])
+                    if ch_name:
+                        ch = discord.utils.get(guild.text_channels, name=ch_name)
+                        if ch:
+                            await ch.send(
+                                f"⏱️ **{member.display_name}** retiré de la file "
+                                f"**{QUEUE_LABELS.get(joueur['queue_name'], joueur['queue_name'])}** "
+                                f"(AFK {AFK_MINUTES} min)."
+                            )
+                    break
+        except Exception as exc:
+            log.error("AFK checker error: %s", exc)
 
     @afk_checker.before_loop
     async def before_afk_checker(self):
